@@ -4,6 +4,7 @@ Extracts structured hierarchical text, tables, and embedded images from DOCX and
 Preserves slide numbers, image indices, and table associations.
 """
 
+import hashlib
 import io
 from pathlib import Path
 from typing import List
@@ -57,6 +58,7 @@ class OfficeExtractor:
             raise ValueError(f"Malformed or unreadable DOCX file: {e}")
 
         documents: List[Document] = []
+        seen_pptx_hashes: set[str] = set()
         current_section = "General / Introduction"
         current_block: List[str] = []
         approx_page = 1
@@ -117,6 +119,7 @@ class OfficeExtractor:
         # 2. Extract embedded images in DOCX if vision analysis enabled
         if settings.ENABLE_IMAGE_ANALYSIS and hasattr(doc, "part"):
             img_counter = 0
+            seen_docx_hashes: set[str] = set()
             for rel in doc.part.related_parts.values():
                 if "image" in rel.content_type:
                     img_counter += 1
@@ -127,8 +130,14 @@ class OfficeExtractor:
                         if len(raw_img_bytes) < 1500:
                             continue
                         pil_img = Image.open(io.BytesIO(raw_img_bytes))
-                        if pil_img.width < 100 or pil_img.height < 100:
+                        is_dec, reason = self.preprocessor.is_decorative_or_ignorable(pil_img, raw_img_bytes)
+                        if is_dec:
                             continue
+
+                        img_hash = hashlib.sha256(raw_img_bytes).hexdigest()
+                        if img_hash in seen_docx_hashes:
+                            continue
+                        seen_docx_hashes.add(img_hash)
 
                         frames = self.preprocessor.load_and_preprocess(pil_img)
                         for f_img, f_meta in frames:
@@ -191,6 +200,7 @@ class OfficeExtractor:
             raise ValueError(f"Malformed or unreadable PPTX file: {e}")
 
         documents: List[Document] = []
+        seen_pptx_hashes: set[str] = set()
 
         for slide_idx, slide in enumerate(prs.slides, start=1):
             slide_parts: List[str] = []
@@ -220,32 +230,40 @@ class OfficeExtractor:
                         raw_blob = shape.image.blob
                         if len(raw_blob) > 1500:
                             pil_img = Image.open(io.BytesIO(raw_blob))
-                            if pil_img.width >= 100 and pil_img.height >= 100:
-                                frames = self.preprocessor.load_and_preprocess(pil_img)
-                                for f_img, f_meta in frames:
-                                    v_res = self.vision_client.analyze_image(
-                                        image=f_img,
-                                        prompt_hint=f"PPTX Slide {slide_idx} Image from {file_path.name}",
-                                        metadata=f_meta,
-                                    )
-                                    v_md = v_res.to_rag_markdown()
-                                    if v_md.strip():
-                                        documents.append(
-                                            Document(
-                                                page_content=v_md,
-                                                metadata={
-                                                    "source": file_path.name,
-                                                    "page": slide_idx,
-                                                    "slide_number": slide_idx,
-                                                    "image_index": img_index_on_slide,
-                                                    "file_type": ".pptx",
-                                                    "doc_type": "pptx_embedded_image",
-                                                    "extraction_method": v_res.metadata.get("provider", "gemini-vision"),
-                                                    "technical_labels": v_res.technical_labels[:10],
-                                                    "units_and_measurements": v_res.units_and_measurements[:10],
-                                                },
-                                            )
+                            is_dec, reason = self.preprocessor.is_decorative_or_ignorable(pil_img, raw_blob)
+                            if is_dec:
+                                continue
+
+                            img_hash = hashlib.sha256(raw_blob).hexdigest()
+                            if img_hash in seen_pptx_hashes:
+                                continue
+                            seen_pptx_hashes.add(img_hash)
+
+                            frames = self.preprocessor.load_and_preprocess(pil_img)
+                            for f_img, f_meta in frames:
+                                v_res = self.vision_client.analyze_image(
+                                    image=f_img,
+                                    prompt_hint=f"PPTX Slide {slide_idx} Image from {file_path.name}",
+                                    metadata=f_meta,
+                                )
+                                v_md = v_res.to_rag_markdown()
+                                if v_md.strip():
+                                    documents.append(
+                                        Document(
+                                            page_content=v_md,
+                                            metadata={
+                                                "source": file_path.name,
+                                                "page": slide_idx,
+                                                "slide_number": slide_idx,
+                                                "image_index": img_index_on_slide,
+                                                "file_type": ".pptx",
+                                                "doc_type": "pptx_embedded_image",
+                                                "extraction_method": v_res.metadata.get("provider", "gemini-vision"),
+                                                "technical_labels": v_res.technical_labels[:10],
+                                                "units_and_measurements": v_res.units_and_measurements[:10],
+                                            },
                                         )
+                                    )
                     except Exception as e:
                         logger.debug(f"Failed to extract PPTX slide image: {e}")
 

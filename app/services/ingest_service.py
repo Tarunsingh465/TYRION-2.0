@@ -5,6 +5,7 @@ from fastapi import HTTPException, UploadFile
 from app.core.constants import UPLOAD_FOLDER
 from app.core.logger import get_logger
 from app.ingestion.pipeline import IngestionPipeline
+from app.vision.quota_manager import get_quota_manager
 
 logger = get_logger()
 
@@ -18,6 +19,7 @@ class IngestService:
         self,
         files: list[UploadFile],
     ):
+        get_quota_manager().reset_upload_session()
         upload_dir = Path(UPLOAD_FOLDER)
         upload_dir.mkdir(parents=True, exist_ok=True)
 

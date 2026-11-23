@@ -345,7 +345,38 @@ def render_sidebar(is_online: bool) -> None:
 
         st.divider()
 
-        # 4. Clear Chat History
+        # 4. API Budget & Quota Protection Monitor
+        st.markdown("#### ⚡ API Quota & Usage")
+        if is_online:
+            try:
+                b_resp = requests.get(f"{API_URL}/vision/budget", timeout=4)
+                if b_resp.status_code == 200:
+                    b_data = b_resp.json()
+                    c_today = b_data.get("calls_today", 0)
+                    b_limit = b_data.get("daily_budget", 50)
+                    c_rem = b_data.get("remaining_budget", 50)
+                    c_hits = b_data.get("cached_hits", 0)
+                    c_local = b_data.get("local_ocr_calls", 0)
+                    c_cloud = b_data.get("cloud_vision_calls", 0)
+                    c_rate = b_data.get("rate_limit_errors", 0)
+
+                    col_q1, col_q2 = st.columns(2)
+                    with col_q1:
+                        st.metric("Calls Today", f"{c_today}/{b_limit}")
+                    with col_q2:
+                        st.metric("Cache Hits", f"{c_hits}")
+
+                    st.caption(
+                        f"☁️ **Cloud Vision:** {c_cloud} · 🖥️ **Local OCR:** {c_local}  \n"
+                        f"⚡ **Remaining:** {c_rem} calls · ⚠️ **Rate Limits:** {c_rate}"
+                    )
+                    st.caption("<span style='font-size: 11px; opacity: 0.7;'>*Configured app budget, not Google backend quota.*</span>", unsafe_allow_html=True)
+            except Exception:
+                st.caption("Quota telemetry unavailable.")
+
+        st.divider()
+
+        # 5. Clear Chat History
         if st.button("🧹 Clear Chat History", key="clear_chat_history_btn", use_container_width=True):
             st.session_state.messages = []
             st.session_state.quick_prompt = None
@@ -606,6 +637,36 @@ with tab_eval:
                     delta_color="inverse",
                     help="Cloud Gemini embedding generation + Pinecone Serverless network trip",
                 )
+
+            # API Quota & Usage Telemetry Section
+            st.markdown("---")
+            st.markdown("#### ⚡ API Usage & Quota Protection Telemetry")
+            if is_online:
+                try:
+                    b_resp = requests.get(f"{API_URL}/vision/budget", timeout=4)
+                    if b_resp.status_code == 200:
+                        b = b_resp.json()
+                        q_c1, q_c2, q_c3, q_c4, q_c5 = st.columns(5)
+                        with q_c1:
+                            st.metric("Calls Today", f"{b.get('calls_today', 0)} / {b.get('daily_budget', 50)}")
+                        with q_c2:
+                            st.metric("Remaining Budget", f"{b.get('remaining_budget', 50)}")
+                        with q_c3:
+                            st.metric("Cache Hits", f"{b.get('cached_hits', 0)}", delta="0 tokens", delta_color="normal")
+                        with q_c4:
+                            st.metric("Images Processed", f"{b.get('images_processed', 0)}")
+                        with q_c5:
+                            st.metric("Local OCR Calls", f"{b.get('local_ocr_calls', 0)}", delta="Zero cost", delta_color="normal")
+
+                        st.caption(
+                            f"☁️ **Cloud Vision Calls:** {b.get('cloud_vision_calls', 0)} · "
+                            f"⚠️ **Rate Limits:** {b.get('rate_limit_errors', 0)} · "
+                            f"📦 **Per-Upload Limit:** {b.get('max_calls_per_upload', 5)} · "
+                            f"🖥️ **Local-First Mode:** {'Enabled' if b.get('local_first') else 'Disabled'}  \n"
+                            f"🔒 *Note: Figures reflect client-side application quota controls, not Google's backend cloud quota.*"
+                        )
+                except Exception:
+                    pass
 
             with st.expander("ℹ️ Hardware Environment & Experiment Metadata", expanded=False):
                 st.markdown(

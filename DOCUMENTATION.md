@@ -229,6 +229,20 @@ VISION_PROVIDER=gemini
 VISION_MODEL=gemini-2.5-flash-lite
 ENABLE_IMAGE_ANALYSIS=true
 ALLOW_CLOUD_VISION_PROCESSING=false
+IMAGE_MAX_SIZE_MB=15
+IMAGE_MAX_PIXELS=25000000
+VISION_MAX_RETRIES=3
+VISION_TIMEOUT_SECONDS=60
+
+# ==========================================
+# API Usage Optimization & Quota Protection
+# ==========================================
+VISION_CONCURRENCY=1
+VISION_MAX_CALLS_PER_UPLOAD=5
+VISION_DAILY_CALL_BUDGET=50
+VISION_RETRY_LIMIT=3
+VISION_LOCAL_FIRST=true
+VISION_REQUIRE_USER_CONSENT=true
 
 # ==========================================
 # Pinecone Index Settings

@@ -5,6 +5,7 @@ automatically detects little/no extractable text and invokes multimodal vision /
 Also extracts embedded technical diagrams and schematics with page provenance.
 """
 
+import hashlib
 import io
 from pathlib import Path
 from typing import List
@@ -54,6 +55,7 @@ class PdfExtractor:
 
         documents: List[Document] = []
         total_pages = len(reader.pages)
+        seen_image_hashes: set[str] = set()
 
         for index, page in enumerate(reader.pages):
             page_num = index + 1
@@ -94,8 +96,16 @@ class PdfExtractor:
                             continue
 
                         pil_img = Image.open(io.BytesIO(img_data))
-                        if pil_img.width < 100 or pil_img.height < 100:
+                        is_dec, reason = self.preprocessor.is_decorative_or_ignorable(pil_img, img_data)
+                        if is_dec:
+                            logger.debug(f"Skipping decorative PDF image on page {page_num}: {reason}")
                             continue
+
+                        img_hash = hashlib.sha256(img_data).hexdigest()
+                        if img_hash in seen_image_hashes:
+                            logger.debug(f"Skipping duplicate PDF image on page {page_num} (hash={img_hash[:8]}).")
+                            continue
+                        seen_image_hashes.add(img_hash)
 
                         processed_frames = self.preprocessor.load_and_preprocess(pil_img)
                         for f_idx, (f_img, f_meta) in enumerate(processed_frames):

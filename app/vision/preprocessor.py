@@ -4,11 +4,12 @@ Provides format verification, magic byte checks, EXIF orientation correction,
 resizing, decompression bomb safeguards, and multi-frame TIFF handling.
 """
 
+import hashlib
 import io
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageStat, UnidentifiedImageError
 
 from app.core.config import settings
 from app.core.constants import SUPPORTED_IMAGE_EXTENSIONS
@@ -212,7 +213,46 @@ class ImagePreprocessor:
             meta["processed_width"] = w
             meta["processed_height"] = h
 
+        # 4. Attach SHA-256 digest of normalized image bytes
+        jpeg_bytes = self.to_jpeg_bytes(img)
+        meta["image_sha256"] = hashlib.sha256(jpeg_bytes).hexdigest()
+        meta["normalized_jpeg_bytes"] = jpeg_bytes
+
         return [(img, meta)]
+
+    @staticmethod
+    def is_decorative_or_ignorable(
+        img: Image.Image,
+        raw_bytes: Optional[bytes] = None,
+        min_dimension: int = 120,
+    ) -> Tuple[bool, str]:
+        """
+        Heuristic to detect non-informative or decorative images:
+        - Tiny icons, logos, stamps, bullets (< 120x120 px)
+        - Extreme aspect ratios (< 0.14 or > 7.0, e.g. horizontal divider bars)
+        - Solid blocks or very low-variance background shapes
+        - Very small file payloads (< 2.5 KB)
+        """
+        w, h = img.size
+        if w < min_dimension or h < min_dimension:
+            return True, f"Dimensions ({w}x{h}) smaller than minimum {min_dimension}px"
+
+        aspect = w / max(1, h)
+        if aspect > 7.0 or aspect < 0.14:
+            return True, f"Extreme aspect ratio ({aspect:.2f}), likely banner or divider"
+
+        if raw_bytes and len(raw_bytes) < 2500:
+            return True, f"Payload size ({len(raw_bytes)} bytes) indicates low-detail graphic"
+
+        try:
+            stat = ImageStat.Stat(img)
+            max_std = max(stat.stddev) if stat.stddev else 0.0
+            if max_std < 4.0:
+                return True, f"Low visual variance (stddev={max_std:.1f}), solid or uniform graphic"
+        except Exception:
+            pass
+
+        return False, "Meaningful visual content"
 
     @staticmethod
     def to_jpeg_bytes(img: Image.Image, quality: int = 90) -> bytes:

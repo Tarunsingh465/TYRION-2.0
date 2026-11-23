@@ -407,9 +407,14 @@ class TestMultimodalVision(unittest.TestCase):
         mock_page = MagicMock()
         mock_page.extract_text.return_value = "Scanned"  # Only 7 chars -> triggers is_scanned_page
 
-        # Create uncompressed BMP image bytes (>1000 bytes)
+        # Create uncompressed BMP image bytes with visual content (>1000 bytes)
         raw_io = io.BytesIO()
-        Image.new("RGB", (120, 120), color="yellow").save(raw_io, format="BMP")
+        test_diag = Image.new("RGB", (150, 150), color="white")
+        pixels = test_diag.load()
+        for i in range(100):
+            pixels[i, i] = (0, 0, 0)
+            pixels[i + 20, i] = (255, 0, 0)
+        test_diag.save(raw_io, format="BMP")
         mock_img_obj = MagicMock()
         mock_img_obj.data = raw_io.getvalue()
         mock_page.images = [mock_img_obj]
@@ -425,10 +430,6 @@ class TestMultimodalVision(unittest.TestCase):
         pdf_extractor = PdfExtractor()
         with patch.object(pdf_extractor.vision_client, "analyze_image", return_value=self.mock_vision_output):
             docs = pdf_extractor.extract(pdf_path)
-
-        self.assertEqual(len(docs), 1)
-        self.assertEqual(docs[0].metadata["doc_type"], "scanned_page_vision")
-        self.assertEqual(docs[0].metadata["image_index"], 1)
 
         self.assertEqual(len(docs), 1)
         self.assertEqual(docs[0].metadata["doc_type"], "scanned_page_vision")

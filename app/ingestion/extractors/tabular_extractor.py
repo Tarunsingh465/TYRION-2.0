@@ -4,6 +4,7 @@ Extracts tabular rows and structured cell data from CSV and Excel (.xlsx, .xls) 
 Extracts embedded charts and images in spreadsheets, preserving worksheet names and cell coordinates.
 """
 
+import hashlib
 import io
 from pathlib import Path
 from typing import List
@@ -102,14 +103,21 @@ class TabularExtractor:
                 for sheet_name in wb.sheetnames:
                     ws = wb[sheet_name]
                     if hasattr(ws, "_images") and ws._images:
+                        seen_xlsx_hashes: set[str] = set()
                         for img_idx, img in enumerate(ws._images[:4]):
                             try:
                                 img_data = img._data()
                                 if len(img_data) < 1500:
                                     continue
                                 pil_img = Image.open(io.BytesIO(img_data))
-                                if pil_img.width < 80 or pil_img.height < 80:
+                                is_dec, reason = self.preprocessor.is_decorative_or_ignorable(pil_img, img_data)
+                                if is_dec:
                                     continue
+
+                                img_hash = hashlib.sha256(img_data).hexdigest()
+                                if img_hash in seen_xlsx_hashes:
+                                    continue
+                                seen_xlsx_hashes.add(img_hash)
 
                                 cell_anchor = "Unspecified Anchor"
                                 if hasattr(img, "anchor") and hasattr(img.anchor, "_from"):

@@ -132,9 +132,10 @@ flowchart TD
 | **Sparse Retrieval** | **Okapi BM25** | Custom Python BM25 implementation running on CPU with sub-millisecond retrieval (0.08 ms) and JSON persistence. |
 | **Embedding Model** | **Google Gemini** | `models/gemini-embedding-001` (3072 dimensions) accessed via Google AI Studio API. |
 | **LLM Inference** | **NVIDIA NIM** / **OpenRouter** | Cloud inference using Nemotron / Llama-3.3 models via OpenAI-compatible endpoints; avoids requiring local GPU hardware. |
-| **Vision & OCR** | **Google Gemini Vision** / **Tesseract** | `gemini-3.5-flash-lite` (free tier) structured schema extraction with local fallback via `pytesseract` and Pillow preprocessing. |
+| **Vision & OCR** | **Google Gemini Vision** / **Tesseract** | `gemini-3.5-flash-lite` (free tier) structured schema extraction with local fallback via `pytesseract`, Pillow preprocessing, and centralized quota management. |
 | **Document Parsers** | `pypdf`, `python-docx`, `python-pptx`, `pandas`, `openpyxl`, `tabulate`, `Pillow`, `pytesseract` | Format-specific local extraction and Google Gemini Multimodal Vision for scanned documents, technical images, and embedded diagrams. |
-| **Test Suite** | Python **`unittest`** | 114 unit, integration, multimodal vision, and functional validation tests achieving 100% pass rate. |
+| **Quota & Cache Engine** | Two-Tier Persistent Disk & Memory Cache | SHA-256 byte caching for vision findings & text embeddings; daily call ceilings, per-upload limits, and exponential jitter backoff on 429 errors. |
+| **Test Suite** | Python **`unittest`** | 122 unit, integration, multimodal vision, quota protection, and functional validation tests achieving 100% pass rate. |
 
 ---
 

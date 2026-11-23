@@ -5,6 +5,7 @@ from app.schemas.request import ChatRequest
 from app.schemas.response import ChatResponse
 from app.services.chat_service import ChatService
 from app.services.ingest_service import IngestService
+from app.vision.quota_manager import get_quota_manager
 
 router = APIRouter(
     prefix="/api/v1",
@@ -13,6 +14,7 @@ router = APIRouter(
 
 ingest_service = IngestService()
 chat_service = ChatService()
+quota_manager = get_quota_manager()
 
 
 # =====================================================
@@ -70,6 +72,26 @@ async def delete_document(document_name: str):
     return {
         "message": f"{document_name} deleted successfully."
     }
+
+
+# =====================================================
+# Vision & Quota Management
+# =====================================================
+
+@router.get(
+    "/vision/budget",
+    summary="Get Vision & Embedding API Quota and Budget Statistics",
+)
+async def get_vision_budget():
+    """
+    Returns real-time client-side quota metrics:
+    - Calls today vs configured daily budget
+    - Estimated remaining budget
+    - Images processed and cached hits
+    - Rate limit errors and failed requests
+    - Local OCR vs cloud vision breakdown
+    """
+    return quota_manager.get_stats()
 
 
 # =====================================================

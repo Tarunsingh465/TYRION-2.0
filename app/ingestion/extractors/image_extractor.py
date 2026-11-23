@@ -55,6 +55,7 @@ class ImageExtractor:
                 image=frame_img,
                 prompt_hint=f"Industrial document or technical image: {path.name}",
                 metadata=frame_meta,
+                is_direct_upload=True,
             )
 
             rag_markdown = extraction.to_rag_markdown()

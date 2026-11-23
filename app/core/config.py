@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     VISION_MAX_RETRIES: int = 3
     VISION_TIMEOUT_SECONDS: int = 60
 
+    # API Request Control, Quota Protection & Caching
+    VISION_CONCURRENCY: int = 1
+    VISION_MAX_CALLS_PER_UPLOAD: int = 5
+    VISION_DAILY_CALL_BUDGET: int = 50
+    VISION_RETRY_LIMIT: int = 3
+    VISION_LOCAL_FIRST: bool = True
+    VISION_REQUIRE_USER_CONSENT: bool = True
+    VISION_CACHE_DIR: str = ".cache/vision"
+    EMBEDDING_CACHE_DIR: str = ".cache/embeddings"
+
     # Pinecone
     PINECONE_INDEX_NAME: str = "tyrion-2-0"
     PINECONE_NAMESPACE: str = "default"
