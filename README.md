@@ -25,18 +25,21 @@ Standard LLM question-answering systems struggle with specialized technical, ind
 
 ### Intended Use Case & Capabilities
 TYRION-2.0 serves as a local decision-support and knowledge-retrieval assistant for engineers and technical reviewers:
-1. **Multi-format document ingestion:** Extracts structured text, sections, and tables from PDFs, Office documents (DOCX, PPTX), spreadsheets (Excel, CSV), and Markdown/text notes.
-2. **Hybrid semantic and keyword retrieval:** Combines high-dimensional dense vector embeddings with local Okapi BM25 sparse keyword matching via Reciprocal Rank Fusion (RRF).
-3. **Similarity threshold gating & abstention:** Filters out low-confidence matches before calling the LLM, safely refusing to answer out-of-corpus queries with 0 citations.
-4. **Evidence-grounded responses:** Synthesizes answers citing verified source files, page numbers, and section headings.
-5. **Empirical evaluation framework:** Ground-truth benchmarking across a 50-question industrial evaluation dataset with separated Development and Held-Out Test splits.
+1. **Multi-format document & multimodal image ingestion:** Extracts structured text, sections, and tables from PDFs, Office documents (DOCX, PPTX), spreadsheets (Excel, CSV), Markdown/text notes, and standalone technical images (`.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`, `.tif`).
+2. **Multimodal vision & OCR intelligence:** Deep visual interpretation of P&ID diagrams, equipment nameplates, electrical schematics, chart trends, and scanned PDFs via Google Gemini Vision (`gemini-3.5-flash-lite` / `gemini-2.5-flash-lite`) with local OCR fallback (`pytesseract`).
+3. **Hybrid semantic and keyword retrieval:** Combines high-dimensional dense vector embeddings with local Okapi BM25 sparse keyword matching via Reciprocal Rank Fusion (RRF).
+4. **Similarity threshold gating & abstention:** Filters out low-confidence matches before calling the LLM, safely refusing to answer out-of-corpus queries with 0 citations.
+5. **Evidence-grounded responses:** Synthesizes answers citing verified source files, page numbers, slide numbers, spreadsheet cells, and image indices.
+6. **Empirical evaluation framework:** Ground-truth benchmarking across a 50-question industrial evaluation dataset with separated Development and Held-Out Test splits.
 
 ---
 
 ## 2. Key Features
 
-- **Multi-Format Ingestion:** Extracts text from `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.csv`, `.md`, and `.txt` files with clean structure preservation (e.g., Excel sheets converted to Markdown tables with retained column headers).
-- **Multi-Granularity Text Chunking:** Configurable character-bounded splitting (`small` = 500 chars, `medium` = 1000 chars, `large` = 1500 chars) assigning canonical, deterministic IDs (`{file_name}_{strategy}_{index}`).
+- **Multi-Format & Multimodal Ingestion:** Extracts text from `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.csv`, `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`, and `.tif` files with clean structure preservation (e.g., Excel sheets converted to Markdown tables with retained column headers and cell coordinates).
+- **Multimodal Image Understanding & OCR:** Direct ingestion of engineering diagrams, equipment nameplates, technical photos, and charts. Employs security preprocessors (magic byte header validation, decompression bomb safeguards, proportional aspect-ratio downscaling) and structured Pydantic schema contracts.
+- **Scanned PDF & Embedded Image Extraction:** Automatically detects scanned pages with little to no extractable text, routing them to vision/OCR processing. Ingests embedded diagrams from DOCX, preserves slide numbers in PPTX, and captures worksheet names and cell anchor coordinates in XLSX.
+- **Multi-Granularity Text Chunking:** Configurable character-bounded splitting (`small` = 500 chars, `medium` = 1000 chars, `large` = 1500 chars) assigning canonical, deterministic IDs (`{file_name}_{strategy}_{index}`) and preserving full multimodal provenance.
 - **Google Gemini Embeddings:** Uses `models/gemini-embedding-001` (3072 dimensions) with verified local dimension caching, eliminating redundant network probe requests during server initialization.
 - **Pinecone Dense Retrieval:** Cloud-managed serverless vector indexing with metadata filtering (`file_name`, `document_id`) and cosine distance metrics.
 - **Local Okapi BM25 Sparse Search:** Pure Python lexical keyword retrieval running entirely in-memory on CPU in < 0.1 ms with JSON disk persistence.
@@ -129,8 +132,9 @@ flowchart TD
 | **Sparse Retrieval** | **Okapi BM25** | Custom Python BM25 implementation running on CPU with sub-millisecond retrieval (0.08 ms) and JSON persistence. |
 | **Embedding Model** | **Google Gemini** | `models/gemini-embedding-001` (3072 dimensions) accessed via Google AI Studio API. |
 | **LLM Inference** | **NVIDIA NIM** / **OpenRouter** | Cloud inference using Nemotron / Llama-3.3 models via OpenAI-compatible endpoints; avoids requiring local GPU hardware. |
-| **Document Parsers** | `pypdf`, `python-docx`, `python-pptx`, `pandas`, `openpyxl`, `tabulate` | Format-specific local extraction without cloud document dependencies; optional Mistral OCR for scanned files. |
-| **Test Suite** | Python **`unittest`** | 60 unit, integration, and functional validation tests achieving 100% pass rate in ~3.3 seconds. |
+| **Vision & OCR** | **Google Gemini Vision** / **Tesseract** | `gemini-3.5-flash-lite` (free tier) structured schema extraction with local fallback via `pytesseract` and Pillow preprocessing. |
+| **Document Parsers** | `pypdf`, `python-docx`, `python-pptx`, `pandas`, `openpyxl`, `tabulate`, `Pillow`, `pytesseract` | Format-specific local extraction and Google Gemini Multimodal Vision for scanned documents, technical images, and embedded diagrams. |
+| **Test Suite** | Python **`unittest`** | 114 unit, integration, multimodal vision, and functional validation tests achieving 100% pass rate. |
 
 ---
 

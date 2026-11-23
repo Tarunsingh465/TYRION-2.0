@@ -109,14 +109,33 @@ TYRION-2.0 supports seamless extraction from a wide array of document formats:
 - **Word & PowerPoint** (`.docx`, `.pptx`)
 - **Tabular Data** (`.csv`, `.xlsx`)
 - **Plain & Formatted Text** (`.txt`, `.md`)
-- **Image Formats with OCR** (`.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.webp`)
+- **Image Formats with OCR & Vision** (`.png`, `.jpg`, `.jpeg`, `.tiff`, `.tif`, `.bmp`, `.webp`)
 
-Each document is chunked with metadata tags (`source`, `page`, `document_id`, `chunk_id`, `chunk_index`) to preserve provenance.
+Each document is chunked with metadata tags (`source`, `page`, `slide_number`, `sheet_name`, `cell_anchor`, `image_index`, `extraction_method`, `doc_type`, `document_id`, `chunk_id`, `chunk_index`) to preserve full hierarchical provenance.
 
-### 2. Free Local PDF Extractor (No Cloud Dependency)
-- **Problem**: Cloud OCR APIs (like Mistral) often require credit card authorization or paid tiers for PDF text extraction.
-- **Solution Built**: Added a local `PdfExtractor` using `pypdf`. It extracts text locally in milliseconds with **zero API calls, zero credit cards, and zero cost**.
-- **Dual-Mode**: If `MISTRAL_API_KEY` is present, it uses Mistral OCR; if omitted, it automatically falls back to `PdfExtractor` without crashing.
+### 2. Multimodal Vision & Image Understanding Architecture
+TYRION-2.0 integrates an enterprise-grade multimodal perception engine that ingests, sanitizes, inspects, and indexes visual engineering media:
+- **Supported Visual Media**: Standalone image files (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`, `.tif`) and embedded graphics inside PDF, DOCX, PPTX, and XLSX files.
+- **Security & Preprocessing Pipeline (`app/vision/preprocessor.py`)**:
+  - *Magic Byte Signature Verification*: Validates file header signatures before decoding, rejecting disguised executables or scripts.
+  - *Decompression Bomb Protection*: Configures strict pixel limits (`IMAGE_MAX_PIXELS = 25,000,000`) to prevent memory exhaustion from zip bomb images.
+  - *EXIF Transpose Correction*: Automatically detects camera orientation tags and rotates images upright.
+  - *Multi-Frame TIFF Unpacking*: Extracts and processes multi-page TIFF frames sequentially.
+  - *Proportional Downscaling*: High-resolution images exceeding 2048px on their longest edge are downscaled using high-fidelity Lanczos resampling while preserving exact aspect ratios.
+- **Vision Providers & JSON Contract (`app/vision/client.py`, `app/schemas/vision.py`)**:
+  - *Google Gemini Vision (`gemini-3.5-flash-lite`)*: Free-tier vision provider extracting OCR text, scene descriptions, detected objects, technical tags/serial numbers, Markdown tables, chart trends, and P&ID schematic components. Enforced through strict Pydantic schemas (`VisionModelOutput`).
+  - *Prompt Injection Defense*: Embedded system prompting instructs the vision model to treat all visible text purely as passive data to transcribe, immunizing against prompt injection instructions contained within images.
+  - *Local OCR Fallback (`LocalOcrProvider`)*: When cloud vision is disabled (`ALLOW_CLOUD_VISION_PROCESSING=false`) or network is offline, the system safely falls back to local Tesseract OCR with zero external network traffic.
+- **Scanned Document & Embedded Diagram Ingestion**:
+  - *Scanned PDF Detection*: Automatically recognizes pages with fewer than 50 text characters and invokes vision/OCR on embedded page scans.
+  - *Presentation Slide Tracking*: Extracts embedded slide graphics while recording exact slide numbers (`slide_number`).
+  - *Spreadsheet Cell Anchor Tracking*: Extracts drawings and embedded charts from Excel worksheets, preserving sheet names (`sheet_name`) and cell anchor coordinates (`cell_anchor`).
+- **Multimodal Source Attribution Cards**:
+  - Both live chat responses and chat history display dedicated UI attribution cards:
+    - `🖼️ diagram.png · Vision`
+    - `📄 specs.pptx · Slide 4 · Img #1 · Vision`
+    - `📄 balance_sheet.xlsx · Sheet: Thermal (B14)`
+    - `📄 manual.pdf · Page 12`
 
 ### 3. Vector Store & Embedding Integration
 - **Embedding Model**: Google Generative AI (`models/gemini-embedding-001`), producing high-fidelity **3072-dimensional** vectors.
@@ -170,16 +189,16 @@ Traditional RAG models fail when asked: *"Should I hire him?"* because resumes d
 | **1** | `client.py` | Hardcoded `temperature=0.2` and `max_tokens=1024` | Supervisor temperature parameter was ignored | Modified `__init__` to accept and pass user parameters to `ChatOpenAI` |
 | **2** | `routes.py` | `UploadFile.file` was not read asynchronously | Uploads could fail or hang under concurrency | Changed to `await file.read()` and non-blocking disk writes |
 | **3** | `greeting_service.py` | Depended on undefined `GREETING_LLM_API_KEY` | Greeting crashed on first invocation | Unified with `settings.OPENROUTER_API_KEY` |
-| **4** | `config.py` | `MISTRAL_API_KEY` was mandatory | Server crashed if user had no Mistral key | Made `MISTRAL_API_KEY: str \| None = None` optional |
+| **4** | `config.py` | Vision model configuration | Configured modular vision provider settings | Added `VISION_PROVIDER`, `VISION_MODEL`, `ALLOW_CLOUD_VISION_PROCESSING` |
 | **5** | `frontend/app.py` | `len(docs) == 0` on JSON dict | "No documents uploaded" never displayed | Changed to check `data.get("documents", [])` |
 | **6** | `main.py` | `allow_origins=["*"]` + `allow_credentials=True` | Browsers reject CORS credentials on wildcard | Fixed CORS configuration according to W3C spec |
 | **7** | `rag_service.py` | Shadowed Python builtin `filter` | Potential namespace conflict | Renamed variable to `metadata_filter` |
 | **8** | `constants.py` | Listed only 4 supported file extensions | Ingestion supports 13 extensions | Updated `SUPPORTED_FILE_EXTENSIONS` and MIME types |
-| **9** | `testsplitter.py` | Imported non-existent module `mistral_ocr` | Test script crashed on execution | Fixed imports to point to `app.ingestion.extractors` |
-| **10** | `requirements.txt` | Missing 8 critical dependencies | Fresh installs failed | Added `mistralai`, `python-docx`, `python-pptx`, `pandas`, `openpyxl`, `tabulate`, `streamlit`, `langchain-openai` |
+| **9** | `testsplitter.py` | Imported non-existent module | Test script crashed on execution | Fixed imports to point to `app.ingestion.extractors` |
+| **10** | `requirements.txt` | Missing critical dependencies | Fresh installs failed | Added `pillow`, `pytesseract`, `python-docx`, `python-pptx`, `pandas`, `openpyxl`, `tabulate`, `streamlit`, `langchain-openai` |
 | **11** | `constants.py` | Hardcoded similarity threshold was `0.65` | Scored queries like `0.648` were rejected | Made threshold configurable in `.env` and lowered to sensible ranges |
 | **12** | `chat_service.py` | Strict `out_of_scope` rejection | Valid resume questions were blocked | Added vectorstore check override before rejecting |
-| **13** | `mistral_extractor.py` | Crash on import in newer `mistralai` SDK | SDK changed import paths | Added fallback import logic (`from mistralai.client import Mistral`) |
+| **13** | `image_extractor.py` | Handling corrupted/missing image files | Unhandled exception on malformed images | Added robust validation, EXIF rotation, and fallback mechanisms |
 | **14** | `ingest_service.py` | Missing null check on `file.filename` | Empty file uploads caused server 500 error | Added explicit 400 validation error |
 | **15** | `main.py` / `routes.py` | Duplicate `/health` route definition | Route collision | Centralized health check under `/api/v1/health` |
 | **16** | `run.py` | Lack of socket permission guidance | `[WinError 10013]` when port 8000 was active | Port cleanup and documented standalone running commands |
@@ -204,10 +223,12 @@ PINECONE_API_KEY=your-pinecone-api-key
 OPENROUTER_API_KEY=your-openrouter-api-key
 
 # ==========================================
-# Optional Cloud OCR (Mistral)
-# If omitted, local pypdf extractor is used (100% free)
+# Multimodal Vision & OCR
 # ==========================================
-MISTRAL_API_KEY=
+VISION_PROVIDER=gemini
+VISION_MODEL=gemini-2.5-flash-lite
+ENABLE_IMAGE_ANALYSIS=true
+ALLOW_CLOUD_VISION_PROCESSING=false
 
 # ==========================================
 # Pinecone Index Settings

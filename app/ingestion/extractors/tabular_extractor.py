@@ -1,10 +1,21 @@
+"""
+Tabular Extractor for TYRION-2.0.
+Extracts tabular rows and structured cell data from CSV and Excel (.xlsx, .xls) files.
+Extracts embedded charts and images in spreadsheets, preserving worksheet names and cell coordinates.
+"""
+
+import io
 from pathlib import Path
 from typing import List
 
 import pandas as pd
+from PIL import Image
 from langchain_core.documents import Document
 
+from app.core.config import settings
 from app.core.logger import get_logger
+from app.vision.client import get_vision_client
+from app.vision.preprocessor import ImagePreprocessor
 
 logger = get_logger()
 
@@ -14,17 +25,13 @@ DEFAULT_ROWS_PER_CHUNK = 35
 class TabularExtractor:
     """
     Structured extractor for Tabular data (.csv and .xlsx).
-    
-    Capabilities:
-    - Multi-sheet Excel extraction: Reads every worksheet, preserving sheet name & index.
-    - Contextual chunking: Batches tabular rows with repeated column headers so
-      each retrieved chunk retains column semantic context.
-    - Row-level provenance: Annotates row_start, row_end, total_rows in chunk metadata.
-    - Memory-bounded reading: Avoids loading entire giant workbooks into a single string.
+    Extracts spreadsheet data, repeated headers, and embedded technical charts/diagrams.
     """
 
     def __init__(self, rows_per_chunk: int = DEFAULT_ROWS_PER_CHUNK):
         self.rows_per_chunk = rows_per_chunk
+        self.preprocessor = ImagePreprocessor()
+        self.vision_client = get_vision_client()
 
     def extract(self, file_path: Path) -> List[Document]:
         file_path = Path(file_path)
@@ -87,6 +94,60 @@ class TabularExtractor:
         finally:
             excel_file.close()
 
+        # Extract embedded charts / images in worksheets using openpyxl
+        if settings.ENABLE_IMAGE_ANALYSIS and file_path.suffix.lower() == ".xlsx":
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, data_only=True)
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    if hasattr(ws, "_images") and ws._images:
+                        for img_idx, img in enumerate(ws._images[:4]):
+                            try:
+                                img_data = img._data()
+                                if len(img_data) < 1500:
+                                    continue
+                                pil_img = Image.open(io.BytesIO(img_data))
+                                if pil_img.width < 80 or pil_img.height < 80:
+                                    continue
+
+                                cell_anchor = "Unspecified Anchor"
+                                if hasattr(img, "anchor") and hasattr(img.anchor, "_from"):
+                                    col = getattr(img.anchor._from, "col", 0) + 1
+                                    row = getattr(img.anchor._from, "row", 0) + 1
+                                    cell_anchor = f"Cell (Row {row}, Column {col})"
+
+                                frames = self.preprocessor.load_and_preprocess(pil_img)
+                                for f_img, f_meta in frames:
+                                    v_res = self.vision_client.analyze_image(
+                                        f_img,
+                                        prompt_hint=f"Excel Chart/Image from {file_path.name}, Sheet '{sheet_name}', Anchor {cell_anchor}",
+                                        metadata=f_meta,
+                                    )
+                                    v_md = v_res.to_rag_markdown()
+                                    if v_md.strip():
+                                        documents.append(
+                                            Document(
+                                                page_content=v_md,
+                                                metadata={
+                                                    "source": file_path.name,
+                                                    "sheet_name": sheet_name,
+                                                    "cell_anchor": cell_anchor,
+                                                    "page": page_counter,
+                                                    "image_index": img_idx + 1,
+                                                    "file_type": ".xlsx",
+                                                    "doc_type": "xlsx_embedded_image",
+                                                    "extraction_method": v_res.metadata.get("provider", "gemini-vision"),
+                                                    "technical_labels": v_res.technical_labels[:10],
+                                                    "units_and_measurements": v_res.units_and_measurements[:10],
+                                                },
+                                            )
+                                        )
+                            except Exception as e:
+                                logger.debug(f"Could not extract spreadsheet image {img_idx + 1}: {e}")
+            except Exception as e:
+                logger.debug(f"openpyxl embedded image scan skipped: {e}")
+
         if not documents:
             documents.append(
                 Document(
@@ -101,7 +162,7 @@ class TabularExtractor:
             )
 
         logger.info(
-            f"Extracted {len(documents)} tabular chunk(s) across "
+            f"Extracted {len(documents)} tabular/image chunk(s) across "
             f"{len(excel_file.sheet_names)} sheet(s) from '{file_path.name}'"
         )
         return documents
@@ -128,39 +189,48 @@ class TabularExtractor:
                 )
             ]
 
-        # Clean column names (strip whitespace and stringify)
-        df.columns = [str(c).strip() for c in df.columns]
+        # Convert column names to string and replace newlines
+        clean_columns = [str(col).strip().replace("\n", " ") for col in df.columns]
+        df.columns = clean_columns
 
-        # Fill NaNs with empty string for clean markdown display
-        df_clean = df.fillna("")
+        # Fill NaNs with empty string
+        df = df.fillna("")
 
-        total_rows = len(df_clean)
+        total_rows = len(df)
         documents: List[Document] = []
-        chunk_page = page_start
+        num_chunks = max(1, (total_rows + self.rows_per_chunk - 1) // self.rows_per_chunk)
 
-        for start_row in range(0, total_rows, self.rows_per_chunk):
+        for chunk_idx in range(num_chunks):
+            start_row = chunk_idx * self.rows_per_chunk
             end_row = min(start_row + self.rows_per_chunk, total_rows)
-            batch_df = df_clean.iloc[start_row:end_row]
+            chunk_df = df.iloc[start_row:end_row]
 
-            # Generate markdown table for this row slice
-            table_md = batch_df.to_markdown(index=False)
-            header_prefix = f"**Sheet:** `{sheet_name}` | **Rows:** {start_row + 1}–{end_row} of {total_rows}\n\n"
-            content = header_prefix + table_md
+            md_lines: List[str] = [
+                f"### Sheet: {sheet_name} (Rows {start_row + 1} to {end_row} of {total_rows})\n",
+                "| " + " | ".join(clean_columns) + " |",
+                "| " + " | ".join(["---"] * len(clean_columns)) + " |",
+            ]
+
+            for _, row in chunk_df.iterrows():
+                row_values = [str(val).strip().replace("\n", " ") for val in row.values]
+                md_lines.append("| " + " | ".join(row_values) + " |")
+
+            table_content = "\n".join(md_lines)
 
             documents.append(
                 Document(
-                    page_content=content,
+                    page_content=table_content,
                     metadata={
                         "source": source_name,
                         "sheet_name": sheet_name,
-                        "page": chunk_page,
+                        "page": page_start + chunk_idx,
                         "row_start": start_row + 1,
                         "row_end": end_row,
                         "total_rows": total_rows,
                         "file_type": file_type,
+                        "doc_type": "tabular_data",
                     },
                 )
             )
-            chunk_page += 1
 
         return documents

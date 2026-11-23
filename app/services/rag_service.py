@@ -173,6 +173,13 @@ class RagService:
                     "source": doc.metadata.get("source") or doc.metadata.get("file_name"),
                     "page": doc.metadata.get("page"),
                     "section": doc.metadata.get("section"),
+                    "slide_number": doc.metadata.get("slide_number"),
+                    "sheet_name": doc.metadata.get("sheet_name"),
+                    "cell_anchor": doc.metadata.get("cell_anchor"),
+                    "image_index": doc.metadata.get("image_index"),
+                    "extraction_method": doc.metadata.get("extraction_method"),
+                    "file_type": doc.metadata.get("file_type"),
+                    "doc_type": doc.metadata.get("doc_type"),
                     "rrf_score": doc.metadata.get("rrf_score"),
                 }
             )

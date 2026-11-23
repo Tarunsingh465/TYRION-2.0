@@ -1,6 +1,14 @@
+"""
+Office Document Extractor for TYRION-2.0.
+Extracts structured hierarchical text, tables, and embedded images from DOCX and PPTX.
+Preserves slide numbers, image indices, and table associations.
+"""
+
+import io
 from pathlib import Path
 from typing import List
 
+from PIL import Image
 from docx import Document as DocxDocument
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
@@ -9,7 +17,10 @@ from docx.text.paragraph import Paragraph
 from langchain_core.documents import Document
 from pptx import Presentation
 
+from app.core.config import settings
 from app.core.logger import get_logger
+from app.vision.client import get_vision_client
+from app.vision.preprocessor import ImagePreprocessor
 
 logger = get_logger()
 
@@ -17,17 +28,12 @@ logger = get_logger()
 class OfficeExtractor:
     """
     Structured extractor for Microsoft Office documents (.docx and .pptx).
-    
-    DOCX Capabilities:
-    - Extracts headings and preserves section hierarchies.
-    - Extracts tables in order, converting rows to structured markdown tables.
-    - Preserves relationships between table data and parent section headings.
-    
-    PPTX Capabilities:
-    - Extracts slide content slide-by-slide with accurate slide numbers.
-    - Extracts tables and text boxes within each slide.
-    - Preserves slide index in metadata (page = slide_number).
+    Extracts text, markdown tables, and embedded diagrams/photographs with provenance.
     """
+
+    def __init__(self):
+        self.preprocessor = ImagePreprocessor()
+        self.vision_client = get_vision_client()
 
     def extract(self, file_path: Path) -> List[Document]:
         file_path = Path(file_path)
@@ -69,6 +75,7 @@ class OfficeExtractor:
                             "section": section_name,
                             "has_table": has_tbl,
                             "file_type": ".docx",
+                            "doc_type": "docx_section",
                         },
                     )
                 )
@@ -78,7 +85,7 @@ class OfficeExtractor:
                     approx_page += 1
                     words_count = 0
 
-        # Traverse body elements in document order (paragraphs and tables)
+        # 1. Traverse body elements in document order
         for child in doc.element.body:
             if isinstance(child, CT_P):
                 p = Paragraph(child, doc)
@@ -87,10 +94,9 @@ class OfficeExtractor:
                     continue
 
                 style_name = (p.style.name if p.style else "").lower()
-                is_heading = style_name.startswith("heading") or p.style.name in ["Title", "Subtitle"]
+                is_heading = style_name.startswith("heading") or (p.style and p.style.name in ["Title", "Subtitle"])
 
                 if is_heading:
-                    # Flush current block before starting new section
                     if current_block:
                         flush_block(current_section)
                     current_section = text
@@ -99,67 +105,81 @@ class OfficeExtractor:
                     current_block.append(text)
 
             elif isinstance(child, CT_Tbl):
-                # Table encountered in document flow
-                table = Table(child, doc)
-                table_md = self._format_docx_table(table)
-                if table_md:
-                    # Flush any pending paragraph text
-                    if current_block:
-                        flush_block(current_section)
-                    # Add table block under current section
-                    current_block.append(table_md)
+                tbl = Table(child, doc)
+                md_table = self._table_to_markdown(tbl)
+                if md_table:
+                    current_block.append(f"\n{md_table}\n")
                     flush_block(current_section, has_tbl=True)
 
         if current_block:
             flush_block(current_section)
 
-        if not documents:
-            documents.append(
-                Document(
-                    page_content="[Empty document: No readable text or tables found]",
-                    metadata={
-                        "source": file_path.name,
-                        "page": 1,
-                        "section": current_section,
-                        "has_table": False,
-                        "file_type": ".docx",
-                    },
-                )
-            )
+        # 2. Extract embedded images in DOCX if vision analysis enabled
+        if settings.ENABLE_IMAGE_ANALYSIS and hasattr(doc, "part"):
+            img_counter = 0
+            for rel in doc.part.related_parts.values():
+                if "image" in rel.content_type:
+                    img_counter += 1
+                    if img_counter > 8:  # Cap at 8 images per doc to avoid excessive token use
+                        break
+                    try:
+                        raw_img_bytes = rel.blob
+                        if len(raw_img_bytes) < 1500:
+                            continue
+                        pil_img = Image.open(io.BytesIO(raw_img_bytes))
+                        if pil_img.width < 100 or pil_img.height < 100:
+                            continue
 
-        logger.info(f"Extracted {len(documents)} structured section(s) from '{file_path.name}'")
+                        frames = self.preprocessor.load_and_preprocess(pil_img)
+                        for f_img, f_meta in frames:
+                            v_res = self.vision_client.analyze_image(
+                                image=f_img,
+                                prompt_hint=f"DOCX embedded image {img_counter} from {file_path.name}",
+                                metadata=f_meta,
+                            )
+                            v_md = v_res.to_rag_markdown()
+                            if v_md.strip():
+                                documents.append(
+                                    Document(
+                                        page_content=v_md,
+                                        metadata={
+                                            "source": file_path.name,
+                                            "page": approx_page,
+                                            "image_index": img_counter,
+                                            "file_type": ".docx",
+                                            "doc_type": "docx_embedded_image",
+                                            "extraction_method": v_res.metadata.get("provider", "gemini-vision"),
+                                            "technical_labels": v_res.technical_labels[:10],
+                                            "units_and_measurements": v_res.units_and_measurements[:10],
+                                        },
+                                    )
+                                )
+                    except Exception as e:
+                        logger.debug(f"Failed to process embedded image {img_counter} in DOCX: {e}")
+
+        logger.info(f"Extracted {len(documents)} structured block(s) from DOCX '{file_path.name}'")
         return documents
 
-    def _format_docx_table(self, table: Table) -> str:
-        """Converts a docx Table into a clean Markdown representation."""
-        rows_data = []
+    def _table_to_markdown(self, table: Table) -> str:
+        rows = []
         for row in table.rows:
             cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-            # De-duplicate adjacent identical cells from merged cells
-            dedup_cells = []
-            for cell in cells:
-                if not dedup_cells or cell != dedup_cells[-1]:
-                    dedup_cells.append(cell)
-            if any(dedup_cells):
-                rows_data.append(dedup_cells)
+            if any(cells):
+                rows.append(cells)
 
-        if not rows_data:
+        if not rows:
             return ""
 
-        # Normalize column counts
-        max_cols = max(len(r) for r in rows_data)
-        normalized_rows = [r + [""] * (max_cols - len(r)) for r in rows_data]
-
-        header = normalized_rows[0]
-        separator = ["---"] * max_cols
-        body = normalized_rows[1:]
+        headers = rows[0]
+        body = rows[1:] if len(rows) > 1 else []
 
         md_lines = [
-            "| " + " | ".join(header) + " |",
-            "| " + " | ".join(separator) + " |",
+            "| " + " | ".join(headers) + " |",
+            "| " + " | ".join(["---"] * len(headers)) + " |",
         ]
         for row in body:
-            md_lines.append("| " + " | ".join(row) + " |")
+            padded_row = row + [""] * (len(headers) - len(row))
+            md_lines.append("| " + " | ".join(padded_row[:len(headers)]) + " |")
 
         return "\n".join(md_lines)
 
@@ -175,6 +195,7 @@ class OfficeExtractor:
         for slide_idx, slide in enumerate(prs.slides, start=1):
             slide_parts: List[str] = []
             has_table = False
+            img_index_on_slide = 0
 
             for shape in slide.shapes:
                 if shape.has_text_frame:
@@ -192,6 +213,42 @@ class OfficeExtractor:
                     if table_lines:
                         slide_parts.append("\n".join(table_lines))
 
+                # Check for embedded image on slide
+                elif settings.ENABLE_IMAGE_ANALYSIS and hasattr(shape, "image"):
+                    img_index_on_slide += 1
+                    try:
+                        raw_blob = shape.image.blob
+                        if len(raw_blob) > 1500:
+                            pil_img = Image.open(io.BytesIO(raw_blob))
+                            if pil_img.width >= 100 and pil_img.height >= 100:
+                                frames = self.preprocessor.load_and_preprocess(pil_img)
+                                for f_img, f_meta in frames:
+                                    v_res = self.vision_client.analyze_image(
+                                        image=f_img,
+                                        prompt_hint=f"PPTX Slide {slide_idx} Image from {file_path.name}",
+                                        metadata=f_meta,
+                                    )
+                                    v_md = v_res.to_rag_markdown()
+                                    if v_md.strip():
+                                        documents.append(
+                                            Document(
+                                                page_content=v_md,
+                                                metadata={
+                                                    "source": file_path.name,
+                                                    "page": slide_idx,
+                                                    "slide_number": slide_idx,
+                                                    "image_index": img_index_on_slide,
+                                                    "file_type": ".pptx",
+                                                    "doc_type": "pptx_embedded_image",
+                                                    "extraction_method": v_res.metadata.get("provider", "gemini-vision"),
+                                                    "technical_labels": v_res.technical_labels[:10],
+                                                    "units_and_measurements": v_res.units_and_measurements[:10],
+                                                },
+                                            )
+                                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to extract PPTX slide image: {e}")
+
             content = "\n".join(slide_parts).strip()
             if not content:
                 content = f"[Slide {slide_idx}: Visual/Diagrammatic slide with no extractable text]"
@@ -205,6 +262,7 @@ class OfficeExtractor:
                         "slide_number": slide_idx,
                         "has_table": has_table,
                         "file_type": ".pptx",
+                        "doc_type": "pptx_slide_text",
                     },
                 )
             )
@@ -223,5 +281,5 @@ class OfficeExtractor:
                 )
             )
 
-        logger.info(f"Extracted {len(documents)} slide(s) from PPTX '{file_path.name}'")
+        logger.info(f"Extracted {len(documents)} item(s) from PPTX '{file_path.name}'")
         return documents

@@ -21,8 +21,10 @@ pinecone
 # LLMs & Embeddings
 google-generativeai
 
-# OCR
-mistralai
+# Vision & Local OCR
+pillow
+pytesseract
+google-genai
 
 # Document Parsers
 pypdf

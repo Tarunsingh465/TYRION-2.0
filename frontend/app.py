@@ -133,6 +133,52 @@ def inject_auto_scroll():
     )
 
 
+def format_source_card(source: dict) -> str:
+    src = source.get("source") or "Document"
+    file_type = str(source.get("file_type") or "").lower()
+    doc_type = str(source.get("doc_type") or "").lower()
+    method = source.get("extraction_method")
+
+    is_image = (
+        file_type in ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif"]
+        or doc_type == "image"
+        or (method and "vision" in str(method))
+    )
+    icon = "🖼️" if is_image else "📄"
+
+    details = []
+    page = source.get("page")
+    if page is not None:
+        try:
+            details.append(f"Page {int(page)}")
+        except (ValueError, TypeError):
+            details.append(f"Page {page}")
+
+    slide = source.get("slide_number")
+    if slide is not None:
+        details.append(f"Slide {slide}")
+
+    sheet = source.get("sheet_name")
+    cell = source.get("cell_anchor")
+    if sheet:
+        sheet_info = f"Sheet: {sheet}"
+        if cell:
+            sheet_info += f" ({cell})"
+        details.append(sheet_info)
+
+    img_idx = source.get("image_index")
+    if img_idx is not None and not slide and not sheet:
+        details.append(f"Img #{img_idx}")
+
+    if method == "gemini_vision":
+        details.append("Vision")
+    elif method == "local_ocr":
+        details.append("OCR")
+
+    detail_str = f" · {' · '.join(details)}" if details else ""
+    return f'<div class="source-card">{icon} {src}{detail_str}</div>'
+
+
 # Check live health
 is_online = check_backend_status()
 status_text = "ONLINE" if is_online else "OFFLINE"
@@ -177,16 +223,28 @@ def render_sidebar(is_online: bool) -> None:
         SUPPORTED_TYPES = [
             "pdf", "docx", "pptx", "txt", "md",
             "csv", "xlsx", "png", "jpg", "jpeg",
-            "tiff", "bmp", "webp",
+            "tiff", "tif", "bmp", "webp",
         ]
 
         uploaded_files = st.file_uploader(
-            "Upload Technical Files or Manuals",
+            "Upload Technical Files, Manuals, or Images",
             type=SUPPORTED_TYPES,
             accept_multiple_files=True,
-            help="Supports PDF, DOCX, CSV, Excel, TXT, and technical images.",
+            help="Supports PDF, DOCX, CSV, Excel, TXT, and technical images (PNG, JPG, TIFF, WEBP, BMP).",
             key="sidebar_file_uploader",
         )
+
+        if uploaded_files:
+            img_files = [
+                f for f in uploaded_files
+                if Path(f.name).suffix.lower() in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif"]
+            ]
+            if img_files:
+                st.caption(f"🖼️ {len(img_files)} image(s) ready for multimodal vision analysis.")
+                with st.expander("👁️ Preview Image", expanded=False):
+                    st.image(img_files[0], caption=img_files[0].name, use_container_width=True)
+
+        st.caption("🔒 *Multimodal Vision: Extracts OCR text, P&ID diagrams, charts, and equipment labels.*")
 
         if st.button("📤 Upload & Index", key="upload_index_btn", use_container_width=True, type="primary"):
             if not uploaded_files:
@@ -370,11 +428,8 @@ with tab_chat:
                 if msg.get("sources"):
                     st.markdown('<div class="source-pill-container">', unsafe_allow_html=True)
                     for source in msg["sources"]:
-                        src = source.get("source", "Document")
-                        page = source.get("page")
-                        page_str = f" · Page {int(page)}" if page is not None else ""
                         st.markdown(
-                            f'<div class="source-card">📄 {src}{page_str}</div>',
+                            format_source_card(source),
                             unsafe_allow_html=True,
                         )
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -444,11 +499,8 @@ with tab_chat:
                                 if sources:
                                     st.markdown('<div class="source-pill-container">', unsafe_allow_html=True)
                                     for source in sources:
-                                        src = source.get("source", "Document")
-                                        page = source.get("page")
-                                        page_str = f" · Page {int(page)}" if page is not None else ""
                                         st.markdown(
-                                            f'<div class="source-card">📄 {src}{page_str}</div>',
+                                            format_source_card(source),
                                             unsafe_allow_html=True,
                                         )
                                     st.markdown('</div>', unsafe_allow_html=True)

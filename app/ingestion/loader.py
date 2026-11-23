@@ -1,10 +1,18 @@
+"""
+Document and Multimodal Ingestion Loader for TYRION-2.0.
+Routes incoming documents, spreadsheets, presentations, and technical images
+to the appropriate specialized extractor.
+"""
+
 from pathlib import Path
+from typing import List, Union
 
 from langchain_core.documents import Document
 
 from app.core.config import settings
+from app.core.constants import SUPPORTED_FILE_EXTENSIONS
 from app.core.logger import get_logger
-from app.ingestion.extractors.mistral_extractor import MistralExtractor
+from app.ingestion.extractors.image_extractor import ImageExtractor
 from app.ingestion.extractors.office_extractor import OfficeExtractor
 from app.ingestion.extractors.pdf_extractor import PdfExtractor
 from app.ingestion.extractors.tabular_extractor import TabularExtractor
@@ -15,43 +23,35 @@ logger = get_logger()
 
 class DocumentLoader:
     """
-    Routes documents to the appropriate extractor.
+    Routes documents and technical images to specialized extractors.
 
-    Supported Formats
-    -----------------
-    PDF:
-        Native PDF text extraction (local, free) or Mistral OCR
-    OCR Images:
-        PNG, JPG, JPEG, TIFF, BMP, WEBP (requires Mistral OCR)
-    Office:
-        DOCX, PPTX
-    Tabular:
-        CSV, XLSX
-    Text:
-        TXT, MD
+    Supported Formats:
+    - PDF: Native offline text extraction with multimodal vision for scanned pages and embedded diagrams.
+    - Multimodal Images: JPG, JPEG, PNG, WEBP, BMP, TIFF, TIF via Gemini Vision and local OCR fallback.
+    - Office: DOCX, PPTX (hierarchical sections, tables, slide-by-slide indexing, embedded pictures).
+    - Tabular: CSV, XLSX (row context preservation, multi-sheet, embedded spreadsheet charts).
+    - Text: TXT, MD (clean UTF-8 parsing).
     """
 
     def __init__(self):
         pdf_extractor = PdfExtractor()
-        mistral = MistralExtractor()
+        image_extractor = ImageExtractor()
         office = OfficeExtractor()
         tabular = TabularExtractor()
         text = TextExtractor()
 
-        # If Mistral API key is set, use it for PDFs (OCR), otherwise fallback to local pypdf
-        pdf_handler = mistral if settings.MISTRAL_API_KEY else pdf_extractor
-
         self._extractors = {
             # PDF
-            ".pdf": pdf_handler,
+            ".pdf": pdf_extractor,
 
-            # OCR Images
-            ".png": mistral,
-            ".jpg": mistral,
-            ".jpeg": mistral,
-            ".tiff": mistral,
-            ".bmp": mistral,
-            ".webp": mistral,
+            # Multimodal Images (Vision & OCR)
+            ".png": image_extractor,
+            ".jpg": image_extractor,
+            ".jpeg": image_extractor,
+            ".webp": image_extractor,
+            ".bmp": image_extractor,
+            ".tiff": image_extractor,
+            ".tif": image_extractor,
 
             # Office
             ".docx": office,
@@ -66,48 +66,42 @@ class DocumentLoader:
             ".md": text,
         }
 
-    def load(self, file_path: str | Path) -> list[Document]:
+    def load(self, file_path: Union[str, Path]) -> List[Document]:
         """
-        Load a document and return LangChain Documents.
+        Load a document or image file and return extracted LangChain Documents.
         """
-
         file_path = Path(file_path)
-
         self._validate(file_path)
 
         suffix = file_path.suffix.lower()
-
         extractor = self._extractors.get(suffix)
 
-        if extractor is None:
-            supported = ", ".join(sorted(self._extractors.keys()))
-            raise ValueError(
-                f"Unsupported file type '{suffix}'. "
-                f"Supported formats: {supported}"
-            )
+        if not extractor:
+            raise ValueError(f"No extractor registered for file extension: '{suffix}'")
 
-        logger.info(
-            f"Loading '{file_path.name}' using "
-            f"{extractor.__class__.__name__}"
-        )
-
+        logger.info(f"Loading '{file_path.name}' using {extractor.__class__.__name__}")
         documents = extractor.extract(file_path)
 
-        logger.success(
-            f"Loaded {len(documents)} document(s) from "
-            f"'{file_path.name}'."
-        )
+        # Validate extracted content
+        if not documents:
+            raise ValueError(f"Extractor returned 0 documents for file: {file_path.name}")
 
+        logger.success(f"Loaded {len(documents)} document(s) from '{file_path.name}'.")
         return documents
 
-    @staticmethod
-    def _validate(file_path: Path) -> None:
+    def _validate(self, file_path: Path):
+        """
+        Validate file existence and extension support.
+        """
         if not file_path.exists():
-            raise FileNotFoundError(
-                f"File not found: {file_path}"
-            )
+            raise FileNotFoundError(f"File does not exist: {file_path}")
 
         if not file_path.is_file():
+            raise ValueError(f"Path is not a regular file: {file_path}")
+
+        suffix = file_path.suffix.lower()
+        if suffix not in SUPPORTED_FILE_EXTENSIONS:
             raise ValueError(
-                f"{file_path} is not a valid file."
+                f"Unsupported file type '{suffix}'. "
+                f"Supported formats: {', '.join(sorted(SUPPORTED_FILE_EXTENSIONS))}"
             )

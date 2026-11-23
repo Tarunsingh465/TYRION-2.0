@@ -20,7 +20,16 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     GOOGLE_API_KEY: str = ""
     PINECONE_API_KEY: str = ""
-    MISTRAL_API_KEY: str | None = None
+
+    # Vision & Multimodal OCR
+    VISION_PROVIDER: str = "gemini"
+    VISION_MODEL: str = "gemini-2.5-flash-lite"
+    ENABLE_IMAGE_ANALYSIS: bool = True
+    ALLOW_CLOUD_VISION_PROCESSING: bool = True
+    IMAGE_MAX_SIZE_MB: int = 15
+    IMAGE_MAX_PIXELS: int = 25000000
+    VISION_MAX_RETRIES: int = 3
+    VISION_TIMEOUT_SECONDS: int = 60
 
     # Pinecone
     PINECONE_INDEX_NAME: str = "tyrion-2-0"

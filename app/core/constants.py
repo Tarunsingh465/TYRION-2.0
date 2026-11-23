@@ -14,13 +14,25 @@ RAG_SIMILARITY_THRESHOLD = 0.55
 # Supported File Types
 # ==========================================
 
+SUPPORTED_IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".bmp",
+    ".tiff",
+    ".tif",
+}
+
 SUPPORTED_FILE_EXTENSIONS = {
-    # OCR (Mistral)
+    # Documents & PDF
     ".pdf",
+    # Images (Multimodal Vision & OCR)
     ".png",
     ".jpg",
     ".jpeg",
     ".tiff",
+    ".tif",
     ".bmp",
     ".webp",
     # Office
@@ -41,6 +53,8 @@ SUPPORTED_MIME_TYPES = {
     "image/tiff",
     "image/bmp",
     "image/webp",
+    "image/x-ms-bmp",
+    "image/x-tiff",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "text/csv",
