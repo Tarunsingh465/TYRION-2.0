@@ -24,6 +24,31 @@ EVALUATIVE_KEYWORDS = [
     "shortlist",
 ]
 
+SUMMARY_KEYWORDS = [
+    "summarize",
+    "summary",
+    "overview",
+    "brief overview",
+    "executive summary",
+    "what is this document about",
+    "what is the document about",
+    "what are the documents about",
+    "tell me about the document",
+    "tell me about this document",
+    "explain this document",
+    "explain the document",
+    "what does this document contain",
+    "what does this file contain",
+    "what is this report about",
+    "what is this file about",
+    "main points",
+    "key points",
+    "key findings",
+    "synopsis",
+    "highlights of the document",
+    "table of contents",
+]
+
 
 class RagService:
 
@@ -33,8 +58,14 @@ class RagService:
         self.vectorstore = PineconeManager()
 
     def _get_search_query(self, question: str) -> tuple[str, bool]:
+        is_summary = any(kw in question.lower() for kw in SUMMARY_KEYWORDS)
         is_evaluative = any(kw in question.lower() for kw in EVALUATIVE_KEYWORDS)
         is_eng, discipline, _ = is_engineering_query(question)
+        if is_summary:
+            return (
+                f"{question} introduction overview summary executive summary key findings table of contents conclusion",
+                True,
+            )
         if is_evaluative:
             return (
                 f"{question} candidate qualifications skills experience projects education achievements",
@@ -69,7 +100,8 @@ class RagService:
             logger.info("RagService: No active documents in knowledge base. Bypassing retrieval.")
             return False, 0.0, []
 
-        search_query, is_evaluative = self._get_search_query(question)
+        is_summary = any(kw in question.lower() for kw in SUMMARY_KEYWORDS)
+        search_query, is_broad_query = self._get_search_query(question)
 
         # 1. Check Dense candidates
         dense_results = self.retriever.retrieve_dense(
@@ -84,19 +116,23 @@ class RagService:
         top_dense_score = dense_results[0][1] if dense_results else 0.0
         top_bm25_score = bm25_results[0][1] if bm25_results else 0.0
 
-        # Adaptive thresholding: Evaluative & Engineering queries often use cross-domain vocabulary
-        effective_dense_threshold = 0.50 if is_evaluative else settings.RAG_SIMILARITY_THRESHOLD
+        # Adaptive thresholding: Evaluative, Summary & Engineering queries often use cross-domain vocabulary
+        effective_dense_threshold = (
+            0.45 if is_summary else (0.50 if is_broad_query else settings.RAG_SIMILARITY_THRESHOLD)
+        )
         effective_bm25_threshold = settings.BM25_SIMILARITY_THRESHOLD
 
         has_dense_match = top_dense_score >= effective_dense_threshold
         has_bm25_match = top_bm25_score >= effective_bm25_threshold
 
-        is_relevant = has_dense_match or has_bm25_match
+        # For summary queries on active documents, any existing document content is relevant
+        is_relevant = has_dense_match or has_bm25_match or (is_summary and bool(dense_results or bm25_results))
         top_score = top_dense_score if dense_results else top_bm25_score
 
         logger.info(
             f"Relevance check: Dense top_score={top_dense_score:.4f} (threshold={effective_dense_threshold:.2f}, match={has_dense_match}), "
-            f"BM25 top_score={top_bm25_score:.4f} (threshold={effective_bm25_threshold:.2f}, match={has_bm25_match}) -> is_relevant={is_relevant}"
+            f"BM25 top_score={top_bm25_score:.4f} (threshold={effective_bm25_threshold:.2f}, match={has_bm25_match}), "
+            f"is_summary={is_summary} -> is_relevant={is_relevant}"
         )
 
         primary_results = dense_results if (dense_results and has_dense_match) else (bm25_results if has_bm25_match else (dense_results or bm25_results))

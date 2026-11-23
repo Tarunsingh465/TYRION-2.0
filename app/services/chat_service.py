@@ -147,11 +147,13 @@ class ChatService:
                         )
                         return self.rag_service.answer_engineering_fallback(question, discipline=disc)
 
+                    doc_names = f" (`{', '.join(active_docs)}`)" if active_docs else ""
                     return {
                         "answer": (
                             "⚠️ **Out-of-Domain Request:** The RAG system is not authorized to answer "
                             "questions unrelated to your uploaded documents or technical engineering domains. "
-                            "Please upload a document to analyze or ask an engineering, IT, or candidate-evaluation question."
+                            f"The query was not found in your uploaded document(s){doc_names}. "
+                            "Please ask a question related to your uploaded documents, or ask an engineering, IT, or candidate-evaluation question."
                         ),
                         "sources": [],
                     }
